@@ -1,139 +1,220 @@
 import os
-import time
-from pathlib import Path
 import yt_dlp
+import json
 from telegram import Update
-from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, filters
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 
-# Configurazioni
+# Token del bot dal sistema
 TOKEN = os.environ.get("TOKEN")
 if not TOKEN:
     raise ValueError("You must set the TOKEN environment variable with your BotFather token!")
 
-ADMIN_ID = 217966398  # ID Telegram dell'admin
-DOWNLOAD_DIR = Path("./downloads")
-DOWNLOAD_DIR.mkdir(exist_ok=True)
+# Admin e configurazioni
+ADMINS = [217966398]  # Inserisci il tuo ID Telegram
+USERS_FILE = "users.json"
+MAINTENANCE = False
+LIMIT_PER_MINUTE = 5
+ERROR_LOG = []
 
-# Statistiche bot
-STATS = {"total_downloads": 0}
+# Carica utenti registrati
+if os.path.exists(USERS_FILE):
+    with open(USERS_FILE, "r") as f:
+        USERS = json.load(f)
+else:
+    USERS = []
 
-# Funzione per il comando /start
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# Funzione /start
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if user_id not in USERS:
+        USERS.append(user_id)
+        with open(USERS_FILE, "w") as f:
+            json.dump(USERS, f)
     await update.message.reply_text(
-        "👋 Hello! Send me a TikTok link and I'll download it for you in high quality without watermark."
+        "👋 Welcome! Send me a TikTok link and I'll download it for you in high quality."
     )
 
-# Funzione segreta per admin
-async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message.from_user.id != ADMIN_ID:
-        await update.message.reply_text("❌ You are not authorized.")
+# Funzione /stats
+async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id not in ADMINS:
+        await update.message.reply_text("❌ You are not authorized to use this command.")
         return
+    stats_msg = f"📊 Bot statistics:\n- Total users: {len(USERS)}\n- Maintenance mode: {'ON' if MAINTENANCE else 'OFF'}\n- Limit per minute: {LIMIT_PER_MINUTE}"
+    await update.message.reply_text(stats_msg)
 
-    await update.message.reply_text(
-        f"🛠 Admin Panel\nTotal downloads: {STATS['total_downloads']}"
-    )
+# Funzione /users
+async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id not in ADMINS:
+        await update.message.reply_text("❌ You are not authorized to use this command.")
+        return
+    await update.message.reply_text(f"👥 Registered users:\n{USERS}")
 
-# Funzione per scaricare video TikTok
-async def download_video(url: str, outtmpl: str, cookies=None):
-    ydl_opts = {
-        "format": "bestvideo+bestaudio/best",
-        "outtmpl": outtmpl,
-        "merge_output_format": "mp4",
-        "quiet": True,
-        "no_warnings": True,
-        "postprocessors": [{
-            "key": "FFmpegVideoConvertor",
-            "preferedformat": "mp4"
-        }],
-    }
-    if cookies:
-        ydl_opts["cookiefile"] = cookies
-
-    loop = None
+# Funzione /ban
+async def ban_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id not in ADMINS:
+        await update.message.reply_text("❌ Unauthorized.")
+        return
     try:
-        loop = __import__("asyncio").get_running_loop()
-    except RuntimeError:
-        pass
+        user_id = int(context.args[0])
+        reason = " ".join(context.args[1:]) if len(context.args) > 1 else "No reason"
+        if user_id not in USERS:
+            await update.message.reply_text("❌ User not found.")
+            return
+        USERS.remove(user_id)
+        with open(USERS_FILE, "w") as f:
+            json.dump(USERS, f)
+        await update.message.reply_text(f"✅ User {user_id} banned. Reason: {reason}")
+    except:
+        await update.message.reply_text("❌ Usage: /ban <user_id> [reason]")
 
-    if loop and loop.is_running():
-        # yt-dlp è sincrono, quindi esegui in thread pool per non bloccare il bot
-        import asyncio
-        from functools import partial
-        ydl = yt_dlp.YoutubeDL(ydl_opts)
-        info = await asyncio.to_thread(partial(ydl.extract_info, url, download=True))
+# Funzione /unban
+async def unban_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id not in ADMINS:
+        await update.message.reply_text("❌ Unauthorized.")
+        return
+    try:
+        user_id = int(context.args[0])
+        if user_id in USERS:
+            await update.message.reply_text("❌ User is already active.")
+            return
+        USERS.append(user_id)
+        with open(USERS_FILE, "w") as f:
+            json.dump(USERS, f)
+        await update.message.reply_text(f"✅ User {user_id} unbanned.")
+    except:
+        await update.message.reply_text("❌ Usage: /unban <user_id>")
+
+# Funzione /broadcast
+async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id not in ADMINS:
+        await update.message.reply_text("❌ Unauthorized.")
+        return
+    msg = " ".join(context.args)
+    for uid in USERS:
+        try:
+            await context.bot.send_message(uid, msg)
+        except:
+            continue
+    await update.message.reply_text("✅ Broadcast sent.")
+
+# Funzione /maintenance
+async def maintenance_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global MAINTENANCE
+    if update.effective_user.id not in ADMINS:
+        await update.message.reply_text("❌ Unauthorized.")
+        return
+    if context.args[0].lower() == "on":
+        MAINTENANCE = True
+        await update.message.reply_text("⚠️ Maintenance mode activated.")
+    elif context.args[0].lower() == "off":
+        MAINTENANCE = False
+        await update.message.reply_text("✅ Maintenance mode deactivated.")
     else:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=True)
+        await update.message.reply_text("❌ Usage: /maintenance on|off")
 
-    filename = ydl.prepare_filename(info)
-    return filename, info
+# Funzione /setlimit
+async def setlimit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global LIMIT_PER_MINUTE
+    if update.effective_user.id not in ADMINS:
+        await update.message.reply_text("❌ Unauthorized.")
+        return
+    try:
+        LIMIT_PER_MINUTE = int(context.args[0])
+        await update.message.reply_text(f"✅ Limit set to {LIMIT_PER_MINUTE} requests per minute.")
+    except:
+        await update.message.reply_text("❌ Usage: /setlimit <n>")
 
-# Funzione principale per gestire i messaggi
+# Funzione /errors
+async def errors_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id not in ADMINS:
+        await update.message.reply_text("❌ Unauthorized.")
+        return
+    if ERROR_LOG:
+        await update.message.reply_text("\n".join(ERROR_LOG[-10:]))
+    else:
+        await update.message.reply_text("✅ No errors logged.")
+
+# Funzione principale per gestire i messaggi TikTok
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = update.message
-    if not msg or not msg.text:
+    global ERROR_LOG
+    text = update.message.text
+    chat_id = update.effective_chat.id
+    is_private = update.effective_chat.type == "private"
+
+    if MAINTENANCE:
+        if is_private:
+            await update.message.reply_text("⚠️ Bot is under maintenance. Try again later.")
         return
 
-    text = msg.text.strip()
-    private_chat = msg.chat.type == "private"
+    if "tiktok.com" in text:
+        url = text
 
-    # Verifica se è link TikTok
-    if ("tiktok.com" in text) or ("vm.tiktok.com" in text):
+        if is_private:
+            await update.message.reply_text("🔗 Link received! Starting processing...")
+            await update.message.reply_text("⬇️ Downloading video, please wait...")
 
         try:
-            outtmpl = str(DOWNLOAD_DIR / f"video_{int(time.time())}.%(ext)s")
-            cookies_file = "cookies.txt" if os.path.exists("cookies.txt") else None
+            ydl_opts = {
+                "format": "bestvideo+bestaudio/best",
+                "outtmpl": "video.mp4",
+                "quiet": True,
+                "noplaylist": True,
+                "merge_output_format": "mp4",
+            }
 
-            # Messaggi di stato solo in chat privata
-            if private_chat:
-                await msg.reply_text("🔗 Link received! Starting processing...")
-                await msg.reply_text("⬇️ Downloading TikTok (no watermark, best quality)...")
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=True)
+                title = info.get("title", "tiktok_video")
+                file_name = "video.mp4"
 
-            filepath, info = await download_video(text, outtmpl=outtmpl, cookies=cookies_file)
-
-            # Controllo dimensione max Telegram
-            if os.path.getsize(filepath) > 49 * 1024 * 1024:
-                if private_chat:
-                    await msg.reply_text("❌ The video is too large for Telegram (>50MB).")
-                os.remove(filepath)
+            if os.path.getsize(file_name) > 49 * 1024 * 1024:
+                if is_private:
+                    await update.message.reply_text("❌ The file is too big for Telegram (>50MB).")
+                os.remove(file_name)
                 return
 
-            # Invio video (sempre, sia gruppo che privato)
-            await msg.reply_video(
-                video=open(filepath, "rb"),
-                caption="✅ Here's your TikTok video"
+            # Messaggio finale
+            await update.message.reply_document(
+                open(file_name, "rb"),
+                filename=f"{title}.mp4",
+                caption="✅ Here's your TikTok!" if not is_private else f"✅ Here's your TikTok: {title}"
             )
-            os.remove(filepath)
-
-            # Aggiorna statistiche
-            STATS["total_downloads"] += 1
+            os.remove(file_name)
 
         except Exception as e:
-            if private_chat:
-                await msg.reply_text(f"❌ Download failed: {e}")
-            # Invio errore all'admin
-            try:
-                await context.bot.send_message(
-                    ADMIN_ID, f"Error: {e}\nUser: {msg.from_user.id}\nMsg: {text}"
-                )
-            except:
-                pass
-
+            ERROR_LOG.append(str(e))
+            if len(ERROR_LOG) > 50:
+                ERROR_LOG = ERROR_LOG[-50:]
+            if is_private:
+                await update.message.reply_text(f"❌ An error occurred: {str(e)}")
+            if os.path.exists("video.mp4"):
+                os.remove("video.mp4")
     else:
-        if private_chat:
-            await msg.reply_text("⚠️ Please send a valid TikTok link (https://www.tiktok.com/...)")
+        if is_private:
+            await update.message.reply_text(
+                "⚠️ Please send a valid TikTok link and I will download it for you!"
+            )
 
-# Creazione app bot
+# Creazione applicazione
 app = ApplicationBuilder().token(TOKEN).build()
 
-# Comandi
-app.add_handler(CommandHandler("start", start))
-app.add_handler(CommandHandler("admin", admin_panel))
+# Handler comandi
+app.add_handler(CommandHandler("start", start_command))
+app.add_handler(CommandHandler("stats", stats_command))
+app.add_handler(CommandHandler("users", users_command))
+app.add_handler(CommandHandler("ban", ban_command))
+app.add_handler(CommandHandler("unban", unban_command))
+app.add_handler(CommandHandler("broadcast", broadcast_command))
+app.add_handler(CommandHandler("maintenance", maintenance_command))
+app.add_handler(CommandHandler("setlimit", setlimit_command))
+app.add_handler(CommandHandler("errors", errors_command))
 
-# Gestione messaggi
+# Handler messaggi
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-# Avvio bot
+# Avvio del bot
 app.run_polling()
+
+
 
 
