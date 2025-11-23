@@ -16,6 +16,29 @@ MAINTENANCE = False
 LIMIT_PER_MINUTE = 5
 ERROR_LOG = []
 
+# Cartella cache per video già scaricati
+CACHE_DIR = "cache"
+os.makedirs(CACHE_DIR, exist_ok=True)
+VIDEO_CACHE = {}
+MAX_CACHE_FILES = 50  # massimo numero di video in cache
+
+def clean_cache():
+    """Rimuove i file più vecchi se ci sono troppi file nella cache"""
+    files = [os.path.join(CACHE_DIR, f) for f in os.listdir(CACHE_DIR)]
+    if len(files) <= MAX_CACHE_FILES:
+        return
+    files.sort(key=lambda x: os.path.getmtime(x))
+    while len(files) > MAX_CACHE_FILES:
+        try:
+            os.remove(files[0])
+            # Rimuovi dall'eventuale cache interna
+            for k, v in list(VIDEO_CACHE.items()):
+                if v == files[0]:
+                    del VIDEO_CACHE[k]
+            files.pop(0)
+        except:
+            break
+
 # Carica utenti registrati
 if os.path.exists(USERS_FILE):
     with open(USERS_FILE, "r") as f:
@@ -34,7 +57,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "👋 Welcome! Send me a TikTok link and I'll download it for you in high quality."
     )
 
-# Funzione /stats
+# Funzioni admin (stats, users, ban, unban, broadcast, maintenance, setlimit, errors)
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in ADMINS:
         await update.message.reply_text("❌ You are not authorized to use this command.")
@@ -42,14 +65,12 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     stats_msg = f"📊 Bot statistics:\n- Total users: {len(USERS)}\n- Maintenance mode: {'ON' if MAINTENANCE else 'OFF'}\n- Limit per minute: {LIMIT_PER_MINUTE}"
     await update.message.reply_text(stats_msg)
 
-# Funzione /users
 async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in ADMINS:
         await update.message.reply_text("❌ You are not authorized to use this command.")
         return
     await update.message.reply_text(f"👥 Registered users:\n{USERS}")
 
-# Funzione /ban
 async def ban_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in ADMINS:
         await update.message.reply_text("❌ Unauthorized.")
@@ -67,7 +88,6 @@ async def ban_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except:
         await update.message.reply_text("❌ Usage: /ban <user_id> [reason]")
 
-# Funzione /unban
 async def unban_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in ADMINS:
         await update.message.reply_text("❌ Unauthorized.")
@@ -84,7 +104,6 @@ async def unban_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except:
         await update.message.reply_text("❌ Usage: /unban <user_id>")
 
-# Funzione /broadcast
 async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in ADMINS:
         await update.message.reply_text("❌ Unauthorized.")
@@ -97,7 +116,6 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             continue
     await update.message.reply_text("✅ Broadcast sent.")
 
-# Funzione /maintenance
 async def maintenance_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global MAINTENANCE
     if update.effective_user.id not in ADMINS:
@@ -112,7 +130,6 @@ async def maintenance_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     else:
         await update.message.reply_text("❌ Usage: /maintenance on|off")
 
-# Funzione /setlimit
 async def setlimit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global LIMIT_PER_MINUTE
     if update.effective_user.id not in ADMINS:
@@ -124,7 +141,6 @@ async def setlimit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except:
         await update.message.reply_text("❌ Usage: /setlimit <n>")
 
-# Funzione /errors
 async def errors_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in ADMINS:
         await update.message.reply_text("❌ Unauthorized.")
@@ -134,7 +150,7 @@ async def errors_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("✅ No errors logged.")
 
-# Funzione principale per gestire i messaggi TikTok
+# Funzione principale per gestire i messaggi TikTok con caching e gestione gruppi
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global ERROR_LOG
     text = update.message.text
@@ -149,6 +165,25 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if "tiktok.com" in text:
         url = text
 
+        # Controllo caching
+        if url in VIDEO_CACHE:
+            file_name = VIDEO_CACHE[url]
+            if os.path.exists(file_name):
+                if is_private:
+                    await update.message.reply_text("⬇️ Sending cached video...")
+                    await update.message.reply_document(
+                        open(file_name, "rb"),
+                        filename=os.path.basename(file_name),
+                        caption=f"✅ Here's your TikTok: {os.path.splitext(os.path.basename(file_name))[0]}"
+                    )
+                else:
+                    await update.message.reply_document(
+                        open(file_name, "rb"),
+                        filename=os.path.basename(file_name),
+                        caption=f"✅ Here's your TikTok: @{update.effective_user.username}"
+                    )
+                return
+
         if is_private:
             await update.message.reply_text("🔗 Link received! Starting processing...")
             await update.message.reply_text("⬇️ Downloading video, please wait...")
@@ -156,7 +191,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             ydl_opts = {
                 "format": "bestvideo+bestaudio/best",
-                "outtmpl": "video.mp4",
+                "outtmpl": os.path.join(CACHE_DIR, "tiktok_%(id)s.%(ext)s"),
                 "quiet": True,
                 "noplaylist": True,
                 "merge_output_format": "mp4",
@@ -165,21 +200,30 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=True)
                 title = info.get("title", "tiktok_video")
-                file_name = "video.mp4"
+                file_name = os.path.join(CACHE_DIR, f"tiktok_{info['id']}.mp4")
+
+            # Pulizia cache prima di salvare
+            clean_cache()
+            VIDEO_CACHE[url] = file_name
 
             if os.path.getsize(file_name) > 49 * 1024 * 1024:
                 if is_private:
                     await update.message.reply_text("❌ The file is too big for Telegram (>50MB).")
-                os.remove(file_name)
                 return
 
-            # Messaggio finale
-            await update.message.reply_document(
-                open(file_name, "rb"),
-                filename=f"{title}.mp4",
-                caption="✅ Here's your TikTok!" if not is_private else f"✅ Here's your TikTok: {title}"
-            )
-            os.remove(file_name)
+            # Invio video
+            if is_private:
+                await update.message.reply_document(
+                    open(file_name, "rb"),
+                    filename=f"{title}.mp4",
+                    caption=f"✅ Here's your TikTok: {title}"
+                )
+            else:
+                await update.message.reply_document(
+                    open(file_name, "rb"),
+                    filename=f"{title}.mp4",
+                    caption=f"✅ Here's your TikTok: @{update.effective_user.username}"
+                )
 
         except Exception as e:
             ERROR_LOG.append(str(e))
@@ -187,8 +231,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 ERROR_LOG = ERROR_LOG[-50:]
             if is_private:
                 await update.message.reply_text(f"❌ An error occurred: {str(e)}")
-            if os.path.exists("video.mp4"):
-                os.remove("video.mp4")
     else:
         if is_private:
             await update.message.reply_text(
@@ -214,6 +256,9 @@ app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
 # Avvio del bot
 app.run_polling()
+
+
+
 
 
 
