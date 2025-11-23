@@ -154,7 +154,6 @@ async def errors_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global ERROR_LOG
     text = update.message.text
-    chat_id = update.effective_chat.id
     is_private = update.effective_chat.type == "private"
 
     if MAINTENANCE:
@@ -169,24 +168,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if url in VIDEO_CACHE:
             file_name = VIDEO_CACHE[url]
             if os.path.exists(file_name):
-                if is_private:
-                    await update.message.reply_text("⬇️ Sending cached video...")
-                    await update.message.reply_document(
-                        open(file_name, "rb"),
-                        filename=os.path.basename(file_name),
-                        caption=f"✅ Here's your TikTok: {os.path.splitext(os.path.basename(file_name))[0]}"
-                    )
-                else:
-                    await update.message.reply_document(
-                        open(file_name, "rb"),
-                        filename=os.path.basename(file_name),
-                        caption=f"✅ Here's your TikTok: @{update.effective_user.username}"
-                    )
+                # Invio solo il video, senza caption
+                await update.message.reply_document(open(file_name, "rb"))
                 return
-
-        if is_private:
-            await update.message.reply_text("🔗 Link received! Starting processing...")
-            await update.message.reply_text("⬇️ Downloading video, please wait...")
 
         try:
             ydl_opts = {
@@ -199,7 +183,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=True)
-                title = info.get("title", "tiktok_video")
                 file_name = os.path.join(CACHE_DIR, f"tiktok_{info['id']}.mp4")
 
             # Pulizia cache prima di salvare
@@ -207,23 +190,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             VIDEO_CACHE[url] = file_name
 
             if os.path.getsize(file_name) > 49 * 1024 * 1024:
-                if is_private:
-                    await update.message.reply_text("❌ The file is too big for Telegram (>50MB).")
                 return
 
-            # Invio video
-            if is_private:
-                await update.message.reply_document(
-                    open(file_name, "rb"),
-                    filename=f"{title}.mp4",
-                    caption=f"✅ Here's your TikTok: {title}"
-                )
-            else:
-                await update.message.reply_document(
-                    open(file_name, "rb"),
-                    filename=f"{title}.mp4",
-                    caption=f"✅ Here's your TikTok: @{update.effective_user.username}"
-                )
+            # Invio solo il video
+            await update.message.reply_document(open(file_name, "rb"))
 
         except Exception as e:
             ERROR_LOG.append(str(e))
@@ -256,6 +226,8 @@ app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
 # Avvio del bot
 app.run_polling()
+
+
 
 
 
