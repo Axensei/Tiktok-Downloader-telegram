@@ -4,24 +4,27 @@ import json
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 
-# Token del bot dal sistema
+# ==========================
+# Configurazioni generali
+# ==========================
 TOKEN = os.environ.get("TOKEN")
 if not TOKEN:
     raise ValueError("You must set the TOKEN environment variable with your BotFather token!")
 
-# Admin e configurazioni
 ADMINS = [217966398]  # Inserisci il tuo ID Telegram
 USERS_FILE = "users.json"
 MAINTENANCE = False
 LIMIT_PER_MINUTE = 5
 ERROR_LOG = []
 
-# Cartella cache per video già scaricati
 CACHE_DIR = "cache"
 os.makedirs(CACHE_DIR, exist_ok=True)
 VIDEO_CACHE = {}
 MAX_CACHE_FILES = 50  # massimo numero di video in cache
 
+# ==========================
+# Funzioni di supporto
+# ==========================
 def clean_cache():
     """Rimuove i file più vecchi se ci sono troppi file nella cache"""
     files = [os.path.join(CACHE_DIR, f) for f in os.listdir(CACHE_DIR)]
@@ -31,7 +34,6 @@ def clean_cache():
     while len(files) > MAX_CACHE_FILES:
         try:
             os.remove(files[0])
-            # Rimuovi dall'eventuale cache interna
             for k, v in list(VIDEO_CACHE.items()):
                 if v == files[0]:
                     del VIDEO_CACHE[k]
@@ -39,14 +41,18 @@ def clean_cache():
         except:
             break
 
-# Carica utenti registrati
+# ==========================
+# Caricamento utenti
+# ==========================
 if os.path.exists(USERS_FILE):
     with open(USERS_FILE, "r") as f:
         USERS = json.load(f)
 else:
     USERS = []
 
-# Funzione /start
+# ==========================
+# Comando /start
+# ==========================
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if user_id not in USERS:
@@ -57,17 +63,19 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "👋 Welcome! Send me a TikTok link and I'll download it for you in high quality."
     )
 
-# Funzioni admin (stats, users, ban, unban, broadcast, maintenance, setlimit, errors)
+# ==========================
+# Comandi Admin
+# ==========================
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in ADMINS:
-        await update.message.reply_text("❌ You are not authorized to use this command.")
+        await update.message.reply_text("❌ You are not authorized.")
         return
     stats_msg = f"📊 Bot statistics:\n- Total users: {len(USERS)}\n- Maintenance mode: {'ON' if MAINTENANCE else 'OFF'}\n- Limit per minute: {LIMIT_PER_MINUTE}"
     await update.message.reply_text(stats_msg)
 
 async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in ADMINS:
-        await update.message.reply_text("❌ You are not authorized to use this command.")
+        await update.message.reply_text("❌ Unauthorized.")
         return
     await update.message.reply_text(f"👥 Registered users:\n{USERS}")
 
@@ -150,7 +158,9 @@ async def errors_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("✅ No errors logged.")
 
-# Funzione principale per gestire i messaggi TikTok con caching e gestione gruppi
+# ==========================
+# Gestione messaggi TikTok
+# ==========================
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global ERROR_LOG
     text = update.message.text
@@ -168,9 +178,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if url in VIDEO_CACHE:
             file_name = VIDEO_CACHE[url]
             if os.path.exists(file_name):
-                # Invio solo il video, senza caption
                 await update.message.reply_document(open(file_name, "rb"))
                 return
+
+        if is_private:
+            await update.message.reply_text("🔗 Link received! Downloading...")
 
         try:
             ydl_opts = {
@@ -185,14 +197,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 info = ydl.extract_info(url, download=True)
                 file_name = os.path.join(CACHE_DIR, f"tiktok_{info['id']}.mp4")
 
-            # Pulizia cache prima di salvare
             clean_cache()
             VIDEO_CACHE[url] = file_name
 
             if os.path.getsize(file_name) > 49 * 1024 * 1024:
+                if is_private:
+                    await update.message.reply_text("❌ The file is too big for Telegram (>50MB).")
                 return
 
-            # Invio solo il video
+            # INVIO SOLO VIDEO SENZA TESTO
             await update.message.reply_document(open(file_name, "rb"))
 
         except Exception as e:
@@ -200,14 +213,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if len(ERROR_LOG) > 50:
                 ERROR_LOG = ERROR_LOG[-50:]
             if is_private:
-                await update.message.reply_text(f"❌ An error occurred: {str(e)}")
+                await update.message.reply_text(f"❌ An error occurred.")
+
     else:
         if is_private:
-            await update.message.reply_text(
-                "⚠️ Please send a valid TikTok link and I will download it for you!"
-            )
+            await update.message.reply_text("⚠️ Please send a valid TikTok link!")
 
-# Creazione applicazione
+# ==========================
+# Avvio applicazione
+# ==========================
 app = ApplicationBuilder().token(TOKEN).build()
 
 # Handler comandi
@@ -224,7 +238,7 @@ app.add_handler(CommandHandler("errors", errors_command))
 # Handler messaggi
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-# Avvio del bot
+# Avvio bot
 app.run_polling()
 
 
